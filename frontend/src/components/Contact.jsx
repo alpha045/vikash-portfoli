@@ -27,7 +27,7 @@ function Contact() {
     const currentEmail = form.email
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5001'
+      const apiUrl = import.meta.env.VITE_API_URL || 'https://vikash-portfoli.onrender.com'
       const response = await fetch(`${apiUrl}/api/v1/contact/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
