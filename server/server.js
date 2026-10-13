@@ -10,6 +10,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// Trust the Render reverse proxy.
+// Use 1 only when the trusted deployment path is one proxy hop.
+app.set('trust proxy', 1);
+
 // Allowed frontend origins
 const allowedOrigins = [
   'http://localhost:5173',
@@ -24,7 +28,6 @@ app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests without an Origin header and trusted origins.
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
@@ -59,6 +62,20 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: 'API Endpoint not found.',
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('API Error:', err.message);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error.',
   });
 });
 
