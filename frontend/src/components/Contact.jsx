@@ -20,7 +20,7 @@ const emptyForm = {
 
 const API_URL = (
   import.meta.env.VITE_API_URL ||
-  'https://vikash-portfoli.onrender.com'
+  'https://vikash-portfoli.vercel.app'
 ).replace(/\/+$/, '');
 
 function Contact() {
