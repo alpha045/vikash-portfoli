@@ -1,10 +1,18 @@
 
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 import {
   generateAdminNotificationEmail,
   generateVisitorAutoReplyEmail,
 } from '../utils/emailTemplates.js';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Use a sender address verified in your Resend account.
+// For testing, configure this value using your Resend onboarding
+// sender if it is available to your account.
+const FROM_EMAIL =
+  process.env.FROM_EMAIL || 'onboarding@resend.dev';
 
 export const sendContactEmail = async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -18,7 +26,7 @@ export const sendContactEmail = async (req, res) => {
   try {
     const { name, email, subject, message } = req.body || {};
 
-    // 1. Validate required fields
+    // 1. Validate form fields
     if (
       !name?.trim() ||
       !email?.trim() ||
@@ -31,17 +39,19 @@ export const sendContactEmail = async (req, res) => {
       });
     }
 
-    // 2. Read SMTP configuration
-    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-    const smtpPort = Number(process.env.SMTP_PORT || 587);
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
+    // Basic email format validation
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-    const recipient =
-      process.env.RECIPIENT_EMAIL || 'vikashkumar161012@gmail.com';
+    if (!emailPattern.test(email.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid email address.',
+      });
+    }
 
-    if (!smtpUser || !smtpPass) {
-      console.error('SMTP configuration error: credentials are missing.');
+    // 2. Check API key
+    if (!process.env.RESEND_API_KEY) {
+      console.error('Resend configuration error: API key is missing.');
 
       return res.status(500).json({
         success: false,
@@ -49,131 +59,117 @@ export const sendContactEmail = async (req, res) => {
       });
     }
 
-    if (![465, 587].includes(smtpPort)) {
-      console.error('SMTP configuration error: invalid SMTP port.');
+    const recipient =
+      process.env.RECIPIENT_EMAIL ||
+      'vikashkumar161012@gmail.com';
 
-      return res.status(500).json({
-        success: false,
-        message: 'Invalid email service configuration.',
-      });
-    }
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+    const cleanSubject = subject.trim();
+    const cleanMessage = message.trim();
 
-    const cleanPass = smtpPass.replace(/\s+/g, '');
-
-    // 3. Explicit SMTP configuration
-    // Port 587: STARTTLS
-    // Port 465: Implicit TLS
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      family: 4,
-      auth: {
-        user: smtpUser,
-        pass: cleanPass,
-      },
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 20000,
-    });
-
-    console.log('SMTP configuration:', {
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-    });
-
-    // 4. Generate admin notification email
+    // 3. Generate admin notification
     const adminHtml = generateAdminNotificationEmail({
-      name,
-      email,
-      subject,
-      message,
+      name: cleanName,
+      email: cleanEmail,
+      subject: cleanSubject,
+      message: cleanMessage,
       ip,
       timestamp,
     });
 
     const adminText = `
-New inquiry from ${name}
+New portfolio inquiry
 
-Name: ${name}
-Email: ${email}
-Subject: ${subject}
+Name: ${cleanName}
+Email: ${cleanEmail}
+Subject: ${cleanSubject}
 Date: ${timestamp}
 
 Message:
-${message}
+${cleanMessage}
     `.trim();
 
-    // 5. Send email to portfolio owner
-    const adminResult = await transporter.sendMail({
-      from: `"Vikash Portfolio Contact" <${smtpUser}>`,
-      to: recipient,
-      replyTo: email,
-      subject: `Portfolio Inquiry: ${subject} - from ${name}`,
-      text: adminText,
-      html: adminHtml,
-    });
+    // 4. Send admin notification using Resend API
+    const { data: adminResult, error: adminError } =
+      await resend.emails.send({
+        from: `Vikash Portfolio <${FROM_EMAIL}>`,
+        to: [recipient],
+        replyTo: cleanEmail,
+        subject: `Portfolio Inquiry: ${cleanSubject} - from ${cleanName}`,
+        text: adminText,
+        html: adminHtml,
+      });
 
-    console.log('Admin notification accepted by SMTP:', {
-      messageId: adminResult.messageId,
+    if (adminError) {
+      console.error('Resend admin email error:', {
+        name: adminError.name,
+        message: adminError.message,
+      });
+
+      return res.status(502).json({
+        success: false,
+        message: 'Unable to send your message right now. Please try again later.',
+      });
+    }
+
+    console.log('Admin notification accepted by Resend:', {
+      id: adminResult?.id,
       recipient,
     });
 
-    // 6. Send auto-reply to visitor
-    const sendAutoReply = process.env.SEND_AUTOREPLY !== 'false';
+    // 5. Send visitor auto-reply
+    const sendAutoReply =
+      process.env.SEND_AUTOREPLY !== 'false';
 
     if (sendAutoReply) {
       try {
         const visitorHtml = generateVisitorAutoReplyEmail({
-          name,
-          subject,
-          message,
+          name: cleanName,
+          subject: cleanSubject,
+          message: cleanMessage,
         });
 
-        const visitorResult = await transporter.sendMail({
-          from: `"Vikash Kumar" <${smtpUser}>`,
-          to: email,
-          replyTo: smtpUser,
-          subject: 'Thank you for reaching out! - Vikash Kumar',
-          html: visitorHtml,
-          text: `Hi ${name}, thank you for contacting Vikash Kumar. Your message regarding "${subject}" has been received.`,
-        });
+        const { data: visitorResult, error: visitorError } =
+          await resend.emails.send({
+            from: `Vikash Kumar <${FROM_EMAIL}>`,
+            to: [cleanEmail],
+            replyTo: recipient,
+            subject: 'Thank you for reaching out! - Vikash Kumar',
+            html: visitorHtml,
+            text: `Hi ${cleanName}, thank you for contacting Vikash Kumar. Your message regarding "${cleanSubject}" has been received.`,
+          });
 
-        console.log('Visitor auto-reply accepted by SMTP:', {
-          messageId: visitorResult.messageId,
-        });
+        if (visitorError) {
+          console.error('Resend visitor auto-reply error:', {
+            name: visitorError.name,
+            message: visitorError.message,
+          });
+        } else {
+          console.log('Visitor auto-reply accepted by Resend:', {
+            id: visitorResult?.id,
+          });
+        }
       } catch (autoReplyError) {
-        // Admin notification already succeeded; don't report the whole
-        // contact submission as failed just because auto-reply failed.
-        console.error('Visitor auto-reply failed:', {
-          code: autoReplyError.code,
-          command: autoReplyError.command,
-          responseCode: autoReplyError.responseCode,
-          message: autoReplyError.message,
-        });
+        console.error('Visitor auto-reply failed:', autoReplyError.message);
       }
     }
 
-    // 7. Respond to frontend
+    // 6. Return success to frontend
     return res.status(200).json({
       success: true,
       message: 'Your message has been sent successfully!',
       timestamp,
     });
   } catch (error) {
-    // Log details only on the server. Never expose SMTP credentials.
     console.error('Contact Email Dispatch Failure:', {
-      code: error.code,
-      command: error.command,
-      responseCode: error.responseCode,
+      name: error.name,
       message: error.message,
     });
 
     return res.status(500).json({
       success: false,
-      message:
-        'Unable to send your message right now. Please try again later.',
+      message: 'Unable to send your message right now. Please try again later.',
     });
   }
 };
